@@ -174,10 +174,10 @@ RedQueueDisc::GetTypeId()
                           DoubleValue(2.0),
                           MakeDoubleAccessor(&RedQueueDisc::SetFengAdaptiveB),
                           MakeDoubleChecker<double>())
-            .AddAttribute("LastSet",
+            .AddAttribute("lastSet_currMaxP_At",
                           "Store the last time m_curMaxP was updated",
                           TimeValue(Seconds(0)),
-                          MakeTimeAccessor(&RedQueueDisc::m_lastSet),
+                          MakeTimeAccessor(&RedQueueDisc::m_lastSet_currMaxP_At),
                           MakeTimeChecker())
             .AddAttribute("Rtt",
                           "Round Trip Time to be considered while automatically setting m_bottom",
@@ -331,12 +331,12 @@ RedQueueDisc::DoEnqueue(Ptr<QueueDiscItem> item)
 {
     NS_LOG_FUNCTION(this << item);
 
-    uint32_t nCurrent_queue_len = GetInternalQueue(0)->GetCurrentSize().GetValue();
+    uint32_t Current_queue_len = GetInternalQueue(0)->GetCurrentSize().GetValue();
 
     // simulate number of packets arrival during idle period
     uint32_t m = 0;
 
-    if (m_idle == 1)
+    if (m_isIdle == 1)
     {
         NS_LOG_DEBUG("RED Queue Disc is idle.");
         Time now = Simulator::Now();
@@ -351,10 +351,10 @@ RedQueueDisc::DoEnqueue(Ptr<QueueDiscItem> item)
             m = uint32_t(m_ptc * (now - m_idleTime).GetSeconds());
         }
 
-        m_idle = 0;
+        m_isIdle = 0;
     }
 
-    m_qAvg = Estimator(nCurrent_queue_len, m + 1, m_qAvg, m_wQ);
+    m_qAvg = Estimator(Current_queue_len, m + 1, m_qAvg, m_wQ);
 
     NS_LOG_DEBUG("\t bytesInQueue  " << GetInternalQueue(0)->GetNBytes() << "\tQavg " << m_qAvg);
     NS_LOG_DEBUG("\t packetsInQueue  " << GetInternalQueue(0)->GetNPackets() << "\tQavg "<< m_qAvg);
@@ -363,14 +363,14 @@ RedQueueDisc::DoEnqueue(Ptr<QueueDiscItem> item)
     m_countBytes += item->GetSize();
 
     uint32_t dropType = DTYPE_NONE;
-    if (m_qAvg >= m_minTh && nCurrent_queue_len > 1)
+    if (m_qAvg >= m_minTh && Current_queue_len > 1)
     {
         if ((!m_isGentle && m_qAvg >= m_maxTh) || (m_isGentle && m_qAvg >= 2 * m_maxTh))
         {
             NS_LOG_DEBUG("adding DROP FORCED MARK");
             dropType = DTYPE_FORCED;
         }
-        else if (m_old == 0)
+        else if (m_aboveMinTh == 0)
         {
             /*
              * The average queue size has just crossed the
@@ -380,9 +380,9 @@ RedQueueDisc::DoEnqueue(Ptr<QueueDiscItem> item)
              */
             m_count = 1;
             m_countBytes = item->GetSize();
-            m_old = 1;
+            m_aboveMinTh = 1;
         }
-        else if (DropEarly(item, nCurrent_queue_len))
+        else if (DropEarly(item, Current_queue_len))
         {
             NS_LOG_LOGIC("DropEarly returns 1");
             dropType = DTYPE_UNFORCED;
@@ -392,7 +392,7 @@ RedQueueDisc::DoEnqueue(Ptr<QueueDiscItem> item)
     {
         // No packets are being dropped
         m_Pa = 0.0;
-        m_old = 0;
+        m_aboveMinTh = 0;
     }
 
     if (dropType == DTYPE_UNFORCED)
@@ -491,8 +491,8 @@ RedQueueDisc::InitializeParams()
     m_qAvg = 0.0;
     m_count = 0;
     m_countBytes = 0;
-    m_old = 0;
-    m_idle = 1;
+    m_aboveMinTh = 0;
+    m_isIdle = 1;
 
     double th_diff = (m_maxTh - m_minTh);
     if (th_diff == 0)
@@ -595,7 +595,7 @@ RedQueueDisc::UpdateMaxP(double newAvg)
     {
         // we should increase the average queue size, so decrease m_curMaxP
         m_curMaxP = m_curMaxP * m_aRedBeta;
-        m_lastSet = now;
+        m_lastSet_currMaxP_At = now;
     }
     else if (newAvg > m_maxTh - m_part && m_top > m_curMaxP)
     {
@@ -606,21 +606,21 @@ RedQueueDisc::UpdateMaxP(double newAvg)
             alpha = 0.25 * m_curMaxP;
         }
         m_curMaxP = m_curMaxP + alpha;
-        m_lastSet = now;
+        m_lastSet_currMaxP_At = now;
     }
 }
 
 // Compute the average queue size
 double
-RedQueueDisc::Estimator(uint32_t nCurrent_queue_len, uint32_t m, double oldAvg, double qW)
+RedQueueDisc::Estimator(uint32_t Current_queue_len, uint32_t m, double oldAvg, double qW)
 {
-    NS_LOG_FUNCTION(this << nCurrent_queue_len << m << oldAvg << qW);
+    NS_LOG_FUNCTION(this << Current_queue_len << m << oldAvg << qW);
 
     double newAvg = oldAvg * std::pow(1.0 - qW, m);
-    newAvg += qW * nCurrent_queue_len;
+    newAvg += qW * Current_queue_len;
 
     Time now = Simulator::Now();
-    if (m_isAdaptMaxP && now > m_lastSet + m_interval)
+    if (m_isAdaptMaxP && now > m_lastSet_currMaxP_At + m_interval)
     {
         UpdateMaxP(newAvg);
     }
@@ -800,14 +800,14 @@ RedQueueDisc::DoDequeue()
     if (GetInternalQueue(0)->IsEmpty())
     {
         NS_LOG_LOGIC("Queue empty");
-        m_idle = 1;
+        m_isIdle = 1;
         m_idleTime = Simulator::Now();
 
         return nullptr;
     }
     else
     {
-        m_idle = 0;
+        m_isIdle = 0;
         Ptr<QueueDiscItem> item = GetInternalQueue(0)->Dequeue();
 
         NS_LOG_LOGIC("Popped " << item);
